@@ -1,110 +1,110 @@
 ### Set 1: Vibrating String ###
-using Plots, DifferentialEquations
+using Plots, PlotThemes
+theme(:juno)
 
-struct StringConstruct
-    c::Float64
-    Δx::Float64
-    Δt::Float64
-    Γ::Float64
-    t::Array{Float64}
-    Ψ::Array{Float64, 2}
-    boundaries::Tuple{Float64, Float64}
+""" Object for modeling the string """
+struct VibratingString
+    c::Float64   # wave velocity
+    Δx::Float64  # x-grid size
+    Δt::Float64  # t-grid size
+    Γ::Float64   # step parameter
+    t::Array{Float64} # array of time values
+    Ψ::Array{Float64, 2} # array of amplitude values
 end
 
-function set_boundaries!(string::StringConstruct, boundaries)
-    string.Ψ[[1, end], :] .= boundaries
+""" set boundary conditions for ψ(tᵢ) and Ψ(tᵢ₊₁) """
+function set_bc!(string)
+    string.Ψ[[1, end], :] .= 0.0
 end
 
-function initialize(init_func, N, Δt, c=1.0, L=1.0, boundaries=(0.0, 0.0))
+""" 
+Initialize and return String object
+
+Input
+------
+    - init_func: function(::array), function for initializing Ψ(x) at t=0
+    - N: Int, number of grid points
+    - Δt: Number, time step size
+    
+Returns
+------
+    - String object 
+"""
+function initialize(init_func, N, Δt)
+
+    L = 1.0
+    c = 1.0
 
     Δx = L/N
     x = range(0, stop=L, length=N)
 
-    Ψ = zeros(Float64, N, 3)
+    Ψ = zeros(Float64, N, 2)
     Ψ[:,1] = init_func(x)
     Ψ[:,2] = Ψ[:,1]
 
     Γ = (Δt*c/Δx)^2
-    string = StringConstruct(c, Δx, Δt, Γ, [0.0], Ψ, boundaries)
+    string = VibratingString(c, Δx, Δt, Γ, [0.0], Ψ)
 
-    set_boundaries!(string, boundaries)
+    set_bc!(string)
     return string
 end
 
+""" Step String model one time step. In-place operation."""
+function step!(model)
 
-function step!(string)
+    term1 = circshift(model.Ψ[:,2], -1) - # Ψᵢ₊₁,ⱼ
+            2*model.Ψ[:,2]              + # Ψᵢ,ⱼ
+            circshift(model.Ψ[:,2], 1)    # Ψᵢ₋₁,ⱼ
 
-    term1 = circshift(string.Ψ[:,2], -1) - 2*string.Ψ[:,2] + circshift(string.Ψ[:,2], 1)
-    term2 = 2*string.Ψ[:,2] - string.Ψ[:,1]
-    string.Ψ[:,3] = string.Γ*term1 + term2
-    set_boundaries!(string, string.boundaries)
+    term2 = 2*model.Ψ[:,2] - model.Ψ[:,1] # Ψᵢ,ⱼ - Ψᵢ,ⱼ₋₁
+    model.Ψ[:,1] = model.Ψ[:,2] # swap new state with old state
+    model.Ψ[:,2] = model.Γ*term1 + term2  # update Ψᵢ,ⱼ₊₁ 
+    set_bc!(model) # set boundary conditions
 
-    string.Ψ[:,1] = string.Ψ[:,2]
-    string.Ψ[:,2] = string.Ψ[:,3]
 end
 
 
-function simulate(string, T)
-
-    Ψvals = []
-    push!(Ψvals, string.Ψ[:,2])
+""" Simulate for T time units """
+function simulate(model, T)
     t = 0.0
     while t < T
-        step!(string)
-        push!(Ψvals, string.Ψ[:,3])
-        t += string.Δt
+        step!(model)
+        t += model.Δt
+        push!(model.t, t)
     end
-
-    return Ψvals
 end
 
 
-function animate(string::StringConstruct, T, outpath, fps=10, saveevery=10)
+function animate_string(model, T, outpath; step=1, fps=1)
 
-    N = Int(T/string.Δt)
+    N = Int(T/model.Δt)
     t = 0.0
     anim = @animate for i ∈ 1:N
-        step!(string)
-        t += string.Δt
-        plot(string.Ψ[:,3], ylims=(-1, 1), title="t=$(round(t, digits=2))", legend=false)
-        xlabel!("x")
-        ylabel!("Ψ")
-    end
+        step!(model)
+        t += model.Δt
+        plot(model.Ψ[:,2], ylims=(-1, 1), title="t=$(round(t, digits=2))", 
+                legend=false, xlabel="x", ylabel="Ψ")
+    end every step
 
     gif(anim, outpath*".gif", fps = fps)
 end
 
-function animate(Ψ, T, outpath; fps=10)
-    t = range(0, stop=T, length=size(Ψ, 1))
-    x = range(0, stop=1, length=size(Ψ[1], 1))
-    anim = @animate for i ∈ 1:length(t)
-        plot(x, Ψ[i], ylims=(-1, 1), title="t=$(round(t[i], digits=2))", legend=false)
-        xlabel!("x")
-        ylabel!("Ψ")
-    end
 
-    gif(anim, outpath*".gif", fps = fps)
-end
+function plot_wave(model; title=nothing, label=nothing)
 
-function plot_wave(Ψ, T, outpath, title; nplots=10)
+    x = range(0, stop=1, length=size(model.Ψ, 1))
 
-    t = range(0, stop=T, length=size(Ψ, 1))
-    x = range(0, stop=1, length=size(Ψ[1], 1))
-
-    step = round(Int, size(Ψ, 1)/nplots)
-    #tlabels = ["t = $(round(t[i], digits=2))" for i = 1:step:length(t)]
-    p = plot()
-    for i ∈ 1:step:length(t)
-        label = "t = $(round(t[i], digits=2))"
-        plot!(p, x, Ψ[i], ylims=(-1, 1), label=label)
-    end
+    p = plot(x, model.Ψ[:,2], label=label)
     xlabel!("x")
     ylabel!("Ψ")
-    title!(title)
-    savefig(outpath*".svg")
+    ylims!(-1, 1)
+    if !isnothing(title)
+        title!(title)
+    end
+    p
 end
 
-function visualize(N, Δt, T, fps=10, nplots=10)
+function visualize(N, Δt, T; fps=10, nplots=10)
 
     f1(x) = @. sin(2π*x)
     f2(x) = @. sin(5π*x)
@@ -118,12 +118,25 @@ function visualize(N, Δt, T, fps=10, nplots=10)
     init_funcs = [f1, f2, f3]
     outnames = ["2pi", "5pi", "inner_5pi"]
 
-    results = []
+    x = range(0, stop=1, length=N)
+
+    t_plots = range(0, stop=T, length=nplots) # time at which to plot
     for (init, outname) in zip(init_funcs, outnames)
+        ### plot ###
+        p = plot()
         string = initialize(init, N, Δt)
-        Ψ = simulate(string, T)
-        #animate(Ψ, T, outname)
-        plot_wave(Ψ, 0.2, outname, "outname", nplots=5)
+        plot!(p, x, string.Ψ[:,2], title=outname, label="t = $(round(t_plots[1], digits=2))")
+        for t_plot in t_plots[2:end]
+            simulate(string, t_plot)
+            plot!(p, x, string.Ψ[:,2], label="t = $(round(t_plot, digits=2))")
+        end
+        xlabel!("x")
+        ylabel!("Ψ")
+        savefig("plots/"*outname*".svg")
+
+
+        ### animate ###
+        animate_string(initialize(init, N, Δt), T, "anims/"*outname, step=10, fps=fps)
     end
 
 
