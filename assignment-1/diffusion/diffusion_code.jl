@@ -26,29 +26,6 @@ function initialize(N, D)
 
 end
 
-""" reset the model """
-function reset!(model)
-    fill!(model.c, 0)
-    set_bc!(model)
-end
-
-function central_x(model)
-    """ 
-    Central difference scheme in
-    x direction with periodic boundaries
-    """
-    return circshift(model.c, (0, -1)) + circshift(model.c, (0, 1))
-end
-
-function central_y(model)
-    """ Central difference scheme
-    in y direction
-    """
-    # inner_points = @view model.c[2:end-1, :]
-    diff = circshift(model.c, (-1, 0)) + circshift(model.c, (1, 0))
-end
-
-
 function set_bc!(model)
     model.c[1,:] .= 0.0
     model.c[end,:] .= 1.0
@@ -67,7 +44,8 @@ function step(model)
 
 end
 
-function simulate(model, T; save=false, all=false)
+""" Simulate the model for T time units """
+function simulate(model, T)
     t = 0.0
     while t < T
         step(model)
@@ -95,66 +73,12 @@ function save_to_file(N, D, T, outfile)
         end
         write(file, "t", t_array)
         write(file, "D", D)
+        write(file, "N", N)
     end
     
 end
 
-begin 
-    """ simulate the model for T time units 
 
-    if save=true and all=false: save only concentration along y-axis to file
-    if save=true and all=true: save concentration at all grid points
-
-    """
-    # function simulate(model, T; save=false, all=false)
-    #     if save
-    #         if all
-    #             return simulate_save_all(model, T)
-    #         else
-    #             return simulate_save(model, T)
-    #         end
-    #     else
-    #         simulate_no_save(model, T)
-    #     end
-    # end
-
-    """ Simulate for T time units and return concentration
-    at all grid points to file """
-    # function simulate_save_all(model, T)
-    #     c_values = Array{Float64, 2}[]
-    #     t = 0.0
-
-    #     push!(c_values, model.c[:,:])#[:,1])
-    #     while t < T
-    #         step(model)
-    #         push!(c_values, model.c[:,:])#[:,1])
-    #         t += model.δt
-    #     end
-        
-    #     return c_values
-    # end
-
-    # function simulate_save(model, T)
-    #     c_values = Array{Float64}[]
-    #     t = 0.0
-    #     push!(c_values, model.c[:,1])
-    #     while t < T
-    #         step(model)
-    #         push!(c_values, model.c[:,1])
-    #         t += model.δt
-    #     end
-        
-    #     return c_values
-    # end
-
-    # function simulate_no_save(model, T)
-    #     t = 0.0
-    #     while t < T
-    #         step(model)
-    #         t += model.δt
-    #     end
-    # end
-end
 
 """ animate from file """
 function animate_diffusion(filename, outpath; step=100, fps=10)
@@ -171,59 +95,81 @@ function animate_diffusion(filename, outpath; step=100, fps=10)
                 title="t=$(round(t, digits=2))", 
                 colorbar_title="Concentration")
     end 
-
+    close(file)
     gif(anim, "anims/"*outpath*".gif", fps=10)
 end
 
-function plot_concentration_1D(filename, plotat; with_analytical=false)
+function plot_concentration_1D(filename, plotat; outpath=nothing, with_analytical=false)
     
+    # open file
+    filename = "jlds/"*filename*".jld"
+    file = jldopen(filename, "r")
 
-    filename = "jlds/"*filename#*".jld"
-    t_span = JLD.load(filename, "t")
-    D = 1.0#JLD.load(filename, "D")
+    # get time-array and diffusion coefficient
+    t_span = read(file, "t")
+    D = read(file, "D")
+    N = read(file, "N")
+
+    # indices of given time spots to plot at
     plot_t_idxs = [argmin(abs.(t_span .- t)) for t in plotat]
     
-    vals_to_plot = [JLD.load(filename, "$num")[:,1] for num in plot_t_idxs]
+    #vals_to_plot = [read(file, "$num")[:,1] for num in plot_t_idxs]
     t_vals = t_span[plot_t_idxs]
-    println(t_vals)
     t_labels = reshape(["t=$(round(t, digits=4))" for t in t_vals], 1, :)
-    yrange = range(0, stop=1, length=length(vals_to_plot[1]))
+    yrange = range(0, stop=1, length=N)
 
     colors = [:red, :blue, :yellow, :green, :purple]
+    p = plot()
+    for i ∈ 1:length(plotat)
+        concentration = read(file, "$(plot_t_idxs[i])")[:,1]
+        plot!(p, yrange, concentration, label=t_labels[i],
+              xlabel="y", ylabel="Concentration", legend=:topleft)#, color=colors[i])
+    end
+    close(file)
     if with_analytical
-        p = plot()
-        for i ∈ 1:length(plotat)
-            plot!(p, yrange, vals_to_plot[i], label=t_labels[i],
-            xlabel="y", ylabel="Concentration", legend=:topleft)#, color=colors[i])
-
             analytical_y_range = range(0, stop=1, length=25)
-            scatter!(p, analytical_y_range, c_analytical(analytical_y_range, plotat[i], D), 
-                     label=false, color=:white)
-        end
-    else
-        p = plot(yrange, vals_to_plot, label=t_labels,
-        xlabel="y", ylabel="Concentration", legend=:topleft)
+            for i ∈ 1:length(plotat)
+                analytical_c = c_analytical(analytical_y_range, plotat[i], D)
+            
+                scatter!(p, analytical_y_range, analytical_c, 
+                        label=false, color=:white)
+            end
     end
 
+    if !isnothing(outpath)
+        savefig("plots/"*outpath*".svg")
+    end
     p
 end
 
 
-function plot_concentration_2D(filename, plotat)
+function plot_concentration_2D(filename, plotat; outpath=nothing)
     
 
-    c_values, t_span = values(JLD.load("jlds/"*filename))
-    N = size(c_values[1], 1)
+    # open file
+    filename = "jlds/"*filename*".jld"
+    file = jldopen(filename, "r")
+
+    # get time-array and diffusion coefficient
+    t_span = read(file, "t")
+    D = read(file, "D")
+    N = read(file, "N")
+
+
     # t_span = range(0, stop=model.δt*length(c_values), length=length(c_values))
-    plot_t_idx = argmin(abs.(t_span .- plotat))
-    vals_to_plot = c_values[plot_t_idx]
+    plot_t_idx = argmin(abs.(t_span .- plotat))[1]
     t = t_span[plot_t_idx]
-    t_label = "t=$(round(t*1000, digits=2))"
+    t_label = "t=$(round(t, digits=4))"
     yrange = range(0, stop=1, length=N)
+    
+    concentration = read(file, "$plot_t_idx")
+    heatmap(yrange, yrange, concentration, label=t_label,
+            xlabel="x", ylabel="y", cbar_title="Concentration",
+            title=t_label)
 
-    heatmap(yrange, yrange, vals_to_plot, label=t_label,
-                xlabel="x", ylabel="y")
-
+    if !isnothing(outpath)
+        savefig("plots/"*outpath*".svg")
+    end
 end
 
 erfc(arg) = (2/√π)*quadgk(t -> exp(-(t*t)), arg, Inf)[1]
@@ -231,10 +177,11 @@ erfc(arg) = (2/√π)*quadgk(t -> exp(-(t*t)), arg, Inf)[1]
 
 """ Analytical solution to the diffusion equation """
 function c_analytical(x, t, D, N=100)
-    res = zeros(Float64, length(x))
 
+    res = zeros(Float64, length(x)) # array for storing result
+
+    """ If t=0.0, return zeros everywhere except at y=1"""
     if iszero(t)
-        """ If t=0.0, return zeros everywhere except at y=1"""
         res[end] = 1.0
         return res
     end    

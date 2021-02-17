@@ -22,7 +22,7 @@ function initialize(N, ω=1.0; objects=nothing)
     c_array = zeros(Float64, N, N)
     set_bc!(c_array)
 
-    all_idxs = 1:N
+    all_idxs = 0:N+1
     idx_dict = Dict{Tuple{Int8, Int8}, Int8}([(Int8(y), Int8(x)) => 1 for x in all_idxs, y in all_idxs])
 
     if isnothing(objects)
@@ -149,6 +149,75 @@ function step_SOR!(model, ϵ)
     return flag
 end
 
+function step_SOR_insulating!(model, ϵ)
+    ny, nx = size(model.c)
+
+    flag = true
+    maxdiff = 0
+
+    for i = 2:ny-1
+        old_row = model.c[i,:]
+        for j = 1:nx
+            iszero(model.idxs[Int8.((i, j))]) && continue # inside the object: c = 0
+            if iszero(model.idxs[Int8.((i+1, j))]) 
+                center = model.c[i, j]
+                up = center
+                down = model.c[i-1, j]
+                left = model.c[i, j-1]
+                right = model.c[i, j+1]
+            elseif iszero(model.idxs[Int8.((i-1, j))])
+                center = model.c[i, j]
+                up = model.c[i+1, j]
+                down = center
+                left = model.c[i, j-1]
+                right = model.c[i, j+1]
+            elseif iszero(model.idxs[Int8.((i, j+1))])
+                center = model.c[i, j]
+                up = model.c[i+1, j]
+                down = model.c[i-1, j]
+                left = model.c[i, j-1]
+                right = center
+            elseif iszero(model.idxs[Int8.((i, j-1))])
+                center = model.c[i, j]
+                up = model.c[i+1, j]
+                down = model.c[i-1, j]
+                left = center
+                right = model.c[i, j+1]
+            else
+                up = model.c[i+1, j]
+                down = model.c[i-1, j]
+                center = model.c[i, j]
+
+                if j == 1
+                    left = model.c[i, end]
+                    right = model.c[i, j+1]
+                elseif j == nx
+                    left = model.c[i, end-1]
+                    right = model.c[i, 1]
+                else
+                    left = model.c[i, j-1]
+                    right = model.c[i, j+1]
+                end                
+            end
+
+            model.c[i, j] = 0.25*model.ω*(up + 
+                                 down +
+                                 right +
+                                 left) + (1 - model.ω)*center
+        end
+        rowdiff = maximum(abs.(old_row .- model.c[i,:]))
+        if 0 < rowdiff > maxdiff
+            maxdiff = rowdiff
+        end
+    end
+    if maxdiff < ϵ
+        flag = false
+    end
+
+    set_bc!(model.c)
+    return flag
+end
+
 
 
 function simulate(model, solver, ϵ=1e-8)
@@ -158,6 +227,8 @@ function simulate(model, solver, ϵ=1e-8)
         stepfunc = step_Jacobi!
     elseif solver =="GaussSeidel"
         stepfunc = step_GaussSeidel!
+    elseif solver == "SOR_Insulating"
+        stepfunc = step_SOR_insulating!
     else
         stepfunc = step_SOR!
     end
@@ -302,17 +373,48 @@ function plot_optimal_w(filename)
 
 end
 
-function animate(model, outpath; n=500, step=1, fps=10, ϵ=1e-8)
+function animate_ti_diffusion(model, outpath; solver="SOR", n=500, step=10, fps=10, ϵ=1e-8)
 
     axis = range(0, stop=1, length=size(model.c, 1))
-    heatmap(axis, axis, model.c, xlabel="x", ylabel="y", 
-                colorbar_title="Concentration", title="i = 0")
-    anim = @animate for i ∈ 1:step:n
-        step_SOR!(model, ϵ)
-        heatmap(axis, axis, model.c, xlabel="x", ylabel="y", 
-                colorbar_title="Concentration", title="i = $i")
-        println("$(round(i/n*100, digits=2)) %")
+    #heatmap(axis, axis, model.c, xlabel="x", ylabel="y", 
+    #            colorbar_title="Concentration", title="i = 0")
+
+    if solver == "Jacobi"
+        stepfunc = step_Jacobi!
+    elseif solver =="GaussSeidel"
+        stepfunc = step_GaussSeidel!
+    elseif solver == "SOR_Insulating"
+        stepfunc = step_SOR_insulating!
+    else
+        stepfunc = step_SOR!
     end
 
-    gif(anim, outpath*".gif", fps=fps)
+    anim = @animate for i ∈ 1:n
+        flag = stepfunc(model, ϵ)
+        heatmap(axis, axis, model.c, xlabel="x", ylabel="y", 
+                colorbar_title="Concentration", title="k = $i")
+        println("$(round(i/n*100, digits=2)) %")
+    end when flag
+
+    gif(anim, "anims/"*outpath*".gif", fps=fps)
+end
+
+
+function plot_concentration_2D(model, ϵ = 1e-8; at_k = nothing, title=nothing, solver=step_SOR!)
+
+    if isnothing(at_k)
+        p = heatmap(model.c, xlabel="x", ylabel="y", cbar_title="Concentration",
+                    title=title)
+    else
+        counter = 0
+        for i ∈ 1:at_k
+            solver(model, ϵ)
+        end
+
+        p = heatmap(model.c, xlabel="x", ylabel="y", cbar_title="Concentration",
+                    title="k = $at_k")
+
+    end
+
+    return p
 end
